@@ -11,15 +11,18 @@
 /**
  * @brief Функция для генерации ключа из пароля с использованием PBKDF2.
  * 
- * @param password Пароль.
- * @param salt Соль.
- * @param key Буфер для сохранения ключа.
- * @param key_len Длина ключа.
+ * Использует алгоритм PBKDF2 для получения криптографически безопасного ключа 
+ * на основе пароля и случайной соли.
+ * 
+ * @param password Пароль, используемый для генерации ключа.
+ * @param salt Соль, используемая для защиты от атак по словарю.
+ * @param key Буфер, в который будет записан сгенерированный ключ.
+ * @param key_len Длина желаемого ключа.
  * @param iterations Количество итераций для PBKDF2.
  * @return int 0 в случае успеха, иначе 1.
  */
 int derive_key(const char *password, const unsigned char *salt, unsigned char *key, int key_len, int iterations) {
-    // Используется PBKDF2 для генерации ключа на основе пароля и соли
+    // Генерация ключа с использованием PBKDF2
     if (PKCS5_PBKDF2_HMAC_SHA1(password, strlen(password), salt, 16, iterations, key_len, key) != 1) {
         fprintf(stderr, "Ошибка при генерации ключа.\n");
         return 1;
@@ -154,6 +157,9 @@ int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
 /**
  * @brief Функция для записи исходного файла с имитовставкой в новый файл.
  * 
+ * Записывает содержимое исходного файла и имитовставку в новый файл 
+ * с добавлением суффикса "+mac" к имени файла.
+ * 
  * @param original_file Имя исходного файла.
  * @param mac Имитовставка для записи.
  * @param mac_len Длина имитовставки.
@@ -210,9 +216,9 @@ int main(int argc, char *argv[]) {
     char *password = NULL;
     unsigned char key[32];  // Ключ для AES-256
     unsigned char salt[16]; // Соль для PBKDF2
+    unsigned char iv[12];   // IV для GMAC
     unsigned char mac[16];  // Буфер для имитовставки
     unsigned int mac_len;
-    unsigned char iv[12];   // IV для GMAC
     int iterations = 10000; // Количество итераций для PBKDF2
     int opt;
 
@@ -220,13 +226,14 @@ int main(int argc, char *argv[]) {
     while ((opt = getopt(argc, argv, "f:p:s")) != -1) {
         switch (opt) {
             case 'f':
-                file_name = optarg;  // Чтение имени файла
+                file_name = optarg;
                 break;
             case 'p':
-                password = optarg;  // Чтение пароля
+                password = optarg;
                 break;
             case 's':
-                break;  // Просто флаг для сохранения соли и IV
+                // Флаг -s указан
+                break;
             default:
                 fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
                 return 1;
