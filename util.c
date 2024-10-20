@@ -165,6 +165,17 @@ int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
  * @param mac_len Длина имитовставки.
  * @return int 0 в случае успеха, иначе 1.
  */
+/**
+ * @brief Функция для записи исходного файла с имитовставкой в новый файл.
+ * 
+ * Записывает содержимое исходного файла и имитовставку в новый файл 
+ * с добавлением суффикса "+mac" к имени файла.
+ * 
+ * @param original_file Имя исходного файла.
+ * @param mac Имитовставка для записи.
+ * @param mac_len Длина имитовставки.
+ * @return int 0 в случае успеха, иначе 1.
+ */
 int write_file_with_mac(const char *original_file, const unsigned char *mac, unsigned int mac_len) {
     // Создаем новое имя файла
     char new_file_name[256];
@@ -194,8 +205,12 @@ int write_file_with_mac(const char *original_file, const unsigned char *mac, uns
 
     fclose(orig_file);
 
-    // Записываем имитовставку в новый файл
-    fwrite(mac, 1, mac_len, new_file);
+    // Записываем имитовставку в шестнадцатеричном формате
+    for (unsigned int i = 0; i < mac_len; i++) {
+        fprintf(new_file, "%02x", mac[i]); // Преобразование в шестнадцатеричный формат
+    }
+    fprintf(new_file, "\n"); // Добавление новой строки для удобства
+
     fclose(new_file);
 
     return 0;
