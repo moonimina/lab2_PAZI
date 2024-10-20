@@ -231,11 +231,11 @@ int main(int argc, char *argv[]) {
     char *password = NULL;
     unsigned char key[32];  // Ключ для AES-256
     unsigned char salt[16]; // Соль для PBKDF2
-    unsigned char iv[12];   // IV для GMAC
     unsigned char mac[16];  // Буфер для имитовставки
     unsigned int mac_len;
     int iterations = 10000; // Количество итераций для PBKDF2
     int opt;
+    int generate_salt = 0; // Переменная для проверки флага -s
 
     // Обработка аргументов командной строки
     while ((opt = getopt(argc, argv, "f:p:s")) != -1) {
@@ -247,47 +247,59 @@ int main(int argc, char *argv[]) {
                 password = optarg;
                 break;
             case 's':
-                // Флаг -s указан
+                generate_salt = 1; // Установить флаг генерации соли
                 break;
             default:
-                fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
+                fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s]\n", argv[0]);
                 return 1;
         }
     }
 
     if (!file_name || !password) {
         fprintf(stderr, "Необходимо указать файл и пароль.\n");
-        fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
+        fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s]\n", argv[0]);
         return 1;
     }
 
-    // Генерация соли и IV, если не указано иначе
-    if (optind == 3) {  // Если передан флаг -s
-        if (RAND_bytes(salt, sizeof(salt)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
-            fprintf(stderr, "Ошибка генерации соли или IV.\n");
+    // Если флаг -s установлен, генерируем соль и IV
+    if (generate_salt) {
+        if (RAND_bytes(salt, sizeof(salt)) != 1) {
+            fprintf(stderr, "Ошибка генерации соли.\n");
             return 1;
         }
-        // Сохранение соли и IV
-        if (save_salt_iv(salt, iv) != 0) {
+
+        unsigned char iv[12]; // IV для GMAC
+        if (RAND_bytes(iv, sizeof(iv)) != 1) {
+            fprintf(stderr, "Ошибка генерации IV.\n");
             return 1;
         }
-    } else {
-        // Загрузка соли и IV
-        FILE *salt_file = fopen("salt.bin", "rb");
+
+        // Сохраняем соль и IV в файлы
+        FILE *salt_file = fopen("salt.bin", "wb");
         if (!salt_file) {
-            fprintf(stderr, "Не удалось загрузить соль.\n");
+            perror("Не удалось открыть файл для записи соли");
             return 1;
         }
-        fread(salt, 1, sizeof(salt), salt_file);
+        fwrite(salt, sizeof(salt), 1, salt_file);
         fclose(salt_file);
 
-        FILE *iv_file = fopen("iv.bin", "rb");
+        FILE *iv_file = fopen("iv.bin", "wb");
         if (!iv_file) {
-            fprintf(stderr, "Не удалось загрузить IV.\n");
+            perror("Не удалось открыть файл для записи IV");
             return 1;
         }
-        fread(iv, 1, sizeof(iv), iv_file);
+        fwrite(iv, sizeof(iv), 1, iv_file);
         fclose(iv_file);
+
+    } else {
+        // Если флаг -s не установлен, пытаемся загрузить соль из файла
+        FILE *salt_file = fopen("salt.bin", "rb");
+        if (!salt_file) {
+            fprintf(stderr, "Не удалось загрузить соль. Убедитесь, что файл salt.bin существует или используйте флаг -s для генерации.\n");
+            return 1;
+        }
+        fread(salt, sizeof(salt), 1, salt_file);
+        fclose(salt_file);
     }
 
     // Генерация ключа из пароля
@@ -300,7 +312,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Запись исходного файла с имитовставкой в новый файл
+    // Запись в новый файл с имитовставкой
     if (write_file_with_mac(file_name, mac, mac_len) != 0) {
         return 1;
     }
