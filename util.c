@@ -19,6 +19,7 @@
  * @return int 0 в случае успеха, иначе 1.
  */
 int derive_key(const char *password, const unsigned char *salt, unsigned char *key, int key_len, int iterations) {
+    // Используется PBKDF2 для генерации ключа на основе пароля и соли
     if (PKCS5_PBKDF2_HMAC_SHA1(password, strlen(password), salt, 16, iterations, key_len, key) != 1) {
         fprintf(stderr, "Ошибка при генерации ключа.\n");
         return 1;
@@ -29,16 +30,16 @@ int derive_key(const char *password, const unsigned char *salt, unsigned char *k
 /**
  * @brief Функция для выработки имитовставки GMAC на основе файла и ключа.
  * 
+ * Использует AES-256-GCM для генерации имитовставки на основе содержимого файла.
+ * 
  * @param file_name Имя файла для вычисления имитовставки.
  * @param key Ключ для GMAC.
  * @param key_len Длина ключа.
  * @param mac Буфер для хранения имитовставки.
  * @param mac_len Длина имитовставки.
- * @param iv Вектор инициализации (IV).
- * @param iv_len Длина IV.
  * @return int 0 в случае успеха, иначе 1.
  */
-int generate_gmac(const char *file_name, const unsigned char *key, int key_len, unsigned char *mac, unsigned int *mac_len, const unsigned char *iv, int iv_len) {
+int generate_gmac(const char *file_name, const unsigned char *key, int key_len, unsigned char *mac, unsigned int *mac_len) {
     FILE *file = fopen(file_name, "rb");
     if (!file) {
         perror("Не удалось открыть файл");
@@ -46,8 +47,16 @@ int generate_gmac(const char *file_name, const unsigned char *key, int key_len, 
     }
 
     EVP_CIPHER_CTX *ctx;
+    unsigned char iv[12];  // Используем IV длиной 12 байт (рекомендовано для GCM/GMAC)
     unsigned char buffer[1024];
     size_t bytes_read;
+
+    // Генерация случайного IV
+    if (RAND_bytes(iv, sizeof(iv)) != 1) {
+        fprintf(stderr, "Ошибка генерации IV.\n");
+        fclose(file);
+        return 1;
+    }
 
     // Инициализация контекста для GMAC
     ctx = EVP_CIPHER_CTX_new();
@@ -114,7 +123,83 @@ int generate_gmac(const char *file_name, const unsigned char *key, int key_len, 
 }
 
 /**
+ * @brief Функция для сохранения соли и IV в файлы.
+ * 
+ * Сохраняет соль и IV в файлы salt.bin и iv.bin для последующего использования.
+ * 
+ * @param salt Соль для сохранения.
+ * @param iv IV для сохранения.
+ * @return int 0 в случае успеха, иначе 1.
+ */
+int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
+    FILE *salt_file = fopen("salt.bin", "wb");
+    if (!salt_file) {
+        perror("Не удалось открыть файл для сохранения соли");
+        return 1;
+    }
+    fwrite(salt, 1, 16, salt_file);
+    fclose(salt_file);
+
+    FILE *iv_file = fopen("iv.bin", "wb");
+    if (!iv_file) {
+        perror("Не удалось открыть файл для сохранения IV");
+        return 1;
+    }
+    fwrite(iv, 1, 12, iv_file);
+    fclose(iv_file);
+
+    return 0;
+}
+
+/**
+ * @brief Функция для записи исходного файла с имитовставкой в новый файл.
+ * 
+ * @param original_file Имя исходного файла.
+ * @param mac Имитовставка для записи.
+ * @param mac_len Длина имитовставки.
+ * @return int 0 в случае успеха, иначе 1.
+ */
+int write_file_with_mac(const char *original_file, const unsigned char *mac, unsigned int mac_len) {
+    // Создаем новое имя файла
+    char new_file_name[256];
+    snprintf(new_file_name, sizeof(new_file_name), "%s+mac.txt", original_file);
+    
+    FILE *new_file = fopen(new_file_name, "wb");
+    if (!new_file) {
+        perror("Не удалось открыть файл для записи с имитовставкой");
+        return 1;
+    }
+
+    // Открываем оригинальный файл для чтения
+    FILE *orig_file = fopen(original_file, "rb");
+    if (!orig_file) {
+        perror("Не удалось открыть оригинальный файл для чтения");
+        fclose(new_file);
+        return 1;
+    }
+
+    // Копируем содержимое оригинального файла в новый файл
+    unsigned char buffer[1024];
+    size_t bytes_read;
+
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), orig_file)) > 0) {
+        fwrite(buffer, 1, bytes_read, new_file);
+    }
+
+    fclose(orig_file);
+
+    // Записываем имитовставку в новый файл
+    fwrite(mac, 1, mac_len, new_file);
+    fclose(new_file);
+
+    return 0;
+}
+
+/**
  * @brief Основная функция программы. Обрабатывает аргументы командной строки и выполняет выработку имитовставки.
+ * 
+ * Если программа запускается первый раз для генерации имитовставки, необходимо использовать флаг -s.
+ * Если программа используется для проверки имитовставки, необходимо загрузить файлы salt.bin и iv.bin и не использовать флаг -s.
  * 
  * @param argc Количество аргументов.
  * @param argv Массив аргументов.
@@ -126,24 +211,22 @@ int main(int argc, char *argv[]) {
     unsigned char key[32];  // Ключ для AES-256
     unsigned char salt[16]; // Соль для PBKDF2
     unsigned char mac[16];  // Буфер для имитовставки
-    unsigned char iv[12];   // Вектор инициализации (IV) длиной 12 байт
     unsigned int mac_len;
+    unsigned char iv[12];   // IV для GMAC
     int iterations = 10000; // Количество итераций для PBKDF2
     int opt;
-    int save_iv_salt = 0;
 
     // Обработка аргументов командной строки
     while ((opt = getopt(argc, argv, "f:p:s")) != -1) {
         switch (opt) {
             case 'f':
-                file_name = optarg;
+                file_name = optarg;  // Чтение имени файла
                 break;
             case 'p':
-                password = optarg;
+                password = optarg;  // Чтение пароля
                 break;
             case 's':
-                save_iv_salt = 1; // Сохранять соль и IV при этом запуске
-                break;
+                break;  // Просто флаг для сохранения соли и IV
             default:
                 fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
                 return 1;
@@ -156,51 +239,29 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Если флаг сохранения соли и IV установлен, сгенерировать их
-    if (save_iv_salt) {
-        // Генерация соли
-        if (RAND_bytes(salt, sizeof(salt)) != 1) {
-            fprintf(stderr, "Ошибка генерации соли.\n");
+    // Генерация соли и IV, если не указано иначе
+    if (optind == 3) {  // Если передан флаг -s
+        if (RAND_bytes(salt, sizeof(salt)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
+            fprintf(stderr, "Ошибка генерации соли или IV.\n");
             return 1;
         }
-
-        // Сохранение соли
-        FILE *salt_file = fopen("salt.bin", "wb");
-        if (!salt_file) {
-            perror("Не удалось сохранить соль");
+        // Сохранение соли и IV
+        if (save_salt_iv(salt, iv) != 0) {
             return 1;
         }
-        fwrite(salt, 1, sizeof(salt), salt_file);
-        fclose(salt_file);
-
-        // Генерация случайного IV
-        if (RAND_bytes(iv, sizeof(iv)) != 1) {
-            fprintf(stderr, "Ошибка генерации IV.\n");
-            return 1;
-        }
-
-        // Сохранение IV
-        FILE *iv_file = fopen("iv.bin", "wb");
-        if (!iv_file) {
-            perror("Не удалось сохранить IV");
-            return 1;
-        }
-        fwrite(iv, 1, sizeof(iv), iv_file);
-        fclose(iv_file);
     } else {
-        // Загрузка сохранённой соли
+        // Загрузка соли и IV
         FILE *salt_file = fopen("salt.bin", "rb");
         if (!salt_file) {
-            perror("Не удалось загрузить соль");
+            fprintf(stderr, "Не удалось загрузить соль.\n");
             return 1;
         }
         fread(salt, 1, sizeof(salt), salt_file);
         fclose(salt_file);
 
-        // Загрузка сохранённого IV
         FILE *iv_file = fopen("iv.bin", "rb");
         if (!iv_file) {
-            perror("Не удалось загрузить IV");
+            fprintf(stderr, "Не удалось загрузить IV.\n");
             return 1;
         }
         fread(iv, 1, sizeof(iv), iv_file);
@@ -213,7 +274,12 @@ int main(int argc, char *argv[]) {
     }
 
     // Выработка имитовставки GMAC
-    if (generate_gmac(file_name, key, sizeof(key), mac, &mac_len, iv, sizeof(iv)) != 0) {
+    if (generate_gmac(file_name, key, sizeof(key), mac, &mac_len) != 0) {
+        return 1;
+    }
+
+    // Запись исходного файла с имитовставкой в новый файл
+    if (write_file_with_mac(file_name, mac, mac_len) != 0) {
         return 1;
     }
 
