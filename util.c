@@ -150,7 +150,6 @@ int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
 
     return 0;
 }
-
 /**
  * @brief Функция для записи исходного файла с имитовставкой в новый файл.
  * 
@@ -201,7 +200,6 @@ int write_file_with_mac(const char *original_file, const unsigned char *mac, uns
 
     return 0;
 }
-
 /**
  * @brief Основная функция программы. Обрабатывает аргументы командной строки и выполняет выработку имитовставки.
  * 
@@ -233,7 +231,8 @@ int main(int argc, char *argv[]) {
                 password = optarg;  // Чтение пароля
                 break;
             case 's':
-                break;  // Просто флаг для сохранения соли и IV
+                // Флаг для генерации соли и IV, просто продолжаем
+                break;
             default:
                 fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
                 return 1;
@@ -246,8 +245,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Генерация соли и IV, если не указано иначе
-    if (optind == 3) {  // Если передан флаг -s
+    // Проверяем, указан ли флаг -s
+    if (optind < argc && strcmp(argv[optind], "-s") == 0) {
+        // Генерация соли и IV
         if (RAND_bytes(salt, sizeof(salt)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
             fprintf(stderr, "Ошибка генерации соли или IV.\n");
             return 1;
@@ -296,6 +296,13 @@ int main(int argc, char *argv[]) {
         printf("%02x", mac[i]);
     }
     printf("\n");
+
+    // Очищение чувствительных данных
+    memset(key, 0, sizeof(key));
+    memset(salt, 0, sizeof(salt));
+    memset(mac, 0, sizeof(mac));
+    memset(iv, 0, sizeof(iv));
+    // Если вы выделяли динамическую память, освободите ее здесь
 
     return 0;
 }
