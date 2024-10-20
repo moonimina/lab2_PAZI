@@ -34,9 +34,11 @@ int derive_key(const char *password, const unsigned char *salt, unsigned char *k
  * @param key_len Длина ключа.
  * @param mac Буфер для хранения имитовставки.
  * @param mac_len Длина имитовставки.
+ * @param iv Вектор инициализации (IV).
+ * @param iv_len Длина IV.
  * @return int 0 в случае успеха, иначе 1.
  */
-int generate_gmac(const char *file_name, const unsigned char *key, int key_len, unsigned char *mac, unsigned int *mac_len) {
+int generate_gmac(const char *file_name, const unsigned char *key, int key_len, unsigned char *mac, unsigned int *mac_len, const unsigned char *iv, int iv_len) {
     FILE *file = fopen(file_name, "rb");
     if (!file) {
         perror("Не удалось открыть файл");
@@ -44,16 +46,8 @@ int generate_gmac(const char *file_name, const unsigned char *key, int key_len, 
     }
 
     EVP_CIPHER_CTX *ctx;
-    unsigned char iv[12];  // Используем IV длиной 12 байт (рекомендовано для GCM/GMAC)
     unsigned char buffer[1024];
     size_t bytes_read;
-
-    // Генерация случайного IV
-    if (RAND_bytes(iv, sizeof(iv)) != 1) {
-        fprintf(stderr, "Ошибка генерации IV.\n");
-        fclose(file);
-        return 1;
-    }
 
     // Инициализация контекста для GMAC
     ctx = EVP_CIPHER_CTX_new();
@@ -132,18 +126,14 @@ int main(int argc, char *argv[]) {
     unsigned char key[32];  // Ключ для AES-256
     unsigned char salt[16]; // Соль для PBKDF2
     unsigned char mac[16];  // Буфер для имитовставки
+    unsigned char iv[12];   // Вектор инициализации (IV) длиной 12 байт
     unsigned int mac_len;
     int iterations = 10000; // Количество итераций для PBKDF2
     int opt;
-
-    // Генерация соли
-    if (RAND_bytes(salt, sizeof(salt)) != 1) {
-        fprintf(stderr, "Ошибка генерации соли.\n");
-        return 1;
-    }
+    int save_iv_salt = 0;
 
     // Обработка аргументов командной строки
-    while ((opt = getopt(argc, argv, "f:p:")) != -1) {
+    while ((opt = getopt(argc, argv, "f:p:s")) != -1) {
         switch (opt) {
             case 'f':
                 file_name = optarg;
@@ -151,16 +141,70 @@ int main(int argc, char *argv[]) {
             case 'p':
                 password = optarg;
                 break;
+            case 's':
+                save_iv_salt = 1; // Сохранять соль и IV при этом запуске
+                break;
             default:
-                fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль>\n", argv[0]);
+                fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
                 return 1;
         }
     }
 
     if (!file_name || !password) {
         fprintf(stderr, "Необходимо указать файл и пароль.\n");
-        fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль>\n", argv[0]);
+        fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
         return 1;
+    }
+
+    // Если флаг сохранения соли и IV установлен, сгенерировать их
+    if (save_iv_salt) {
+        // Генерация соли
+        if (RAND_bytes(salt, sizeof(salt)) != 1) {
+            fprintf(stderr, "Ошибка генерации соли.\n");
+            return 1;
+        }
+
+        // Сохранение соли
+        FILE *salt_file = fopen("salt.bin", "wb");
+        if (!salt_file) {
+            perror("Не удалось сохранить соль");
+            return 1;
+        }
+        fwrite(salt, 1, sizeof(salt), salt_file);
+        fclose(salt_file);
+
+        // Генерация случайного IV
+        if (RAND_bytes(iv, sizeof(iv)) != 1) {
+            fprintf(stderr, "Ошибка генерации IV.\n");
+            return 1;
+        }
+
+        // Сохранение IV
+        FILE *iv_file = fopen("iv.bin", "wb");
+        if (!iv_file) {
+            perror("Не удалось сохранить IV");
+            return 1;
+        }
+        fwrite(iv, 1, sizeof(iv), iv_file);
+        fclose(iv_file);
+    } else {
+        // Загрузка сохранённой соли
+        FILE *salt_file = fopen("salt.bin", "rb");
+        if (!salt_file) {
+            perror("Не удалось загрузить соль");
+            return 1;
+        }
+        fread(salt, 1, sizeof(salt), salt_file);
+        fclose(salt_file);
+
+        // Загрузка сохранённого IV
+        FILE *iv_file = fopen("iv.bin", "rb");
+        if (!iv_file) {
+            perror("Не удалось загрузить IV");
+            return 1;
+        }
+        fread(iv, 1, sizeof(iv), iv_file);
+        fclose(iv_file);
     }
 
     // Генерация ключа из пароля
@@ -169,7 +213,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Выработка имитовставки GMAC
-    if (generate_gmac(file_name, key, sizeof(key), mac, &mac_len) != 0) {
+    if (generate_gmac(file_name, key, sizeof(key), mac, &mac_len, iv, sizeof(iv)) != 0) {
         return 1;
     }
 
