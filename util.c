@@ -137,7 +137,11 @@ int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
         perror("Не удалось открыть файл для сохранения соли");
         return 1;
     }
-    fwrite(salt, 1, 16, salt_file);
+    if (fwrite(salt, 1, 16, salt_file) != 16) {
+        perror("Ошибка записи соли в файл");
+        fclose(salt_file);
+        return 1;
+    }
     fclose(salt_file);
 
     FILE *iv_file = fopen("iv.bin", "wb");
@@ -145,7 +149,11 @@ int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
         perror("Не удалось открыть файл для сохранения IV");
         return 1;
     }
-    fwrite(iv, 1, 12, iv_file);
+    if (fwrite(iv, 1, 12, iv_file) != 12) {
+        perror("Ошибка записи IV в файл");
+        fclose(iv_file);
+        return 1;
+    }
     fclose(iv_file);
 
     return 0;
@@ -256,22 +264,31 @@ int main(int argc, char *argv[]) {
         if (save_salt_iv(salt, iv) != 0) {
             return 1;
         }
+        printf("Соль и IV успешно сохранены.\n");
     } else {
         // Загрузка соли и IV
         FILE *salt_file = fopen("salt.bin", "rb");
         if (!salt_file) {
-            fprintf(stderr, "Не удалось загрузить соль.\n");
+            fprintf(stderr, "Не удалось открыть файл salt.bin для чтения.\n");
             return 1;
         }
-        fread(salt, 1, sizeof(salt), salt_file);
+        if (fread(salt, 1, sizeof(salt), salt_file) != sizeof(salt)) {
+            fprintf(stderr, "Ошибка чтения соли из файла.\n");
+            fclose(salt_file);
+            return 1;
+        }
         fclose(salt_file);
-
+        
         FILE *iv_file = fopen("iv.bin", "rb");
         if (!iv_file) {
-            fprintf(stderr, "Не удалось загрузить IV.\n");
+            fprintf(stderr, "Не удалось открыть файл iv.bin для чтения.\n");
             return 1;
         }
-        fread(iv, 1, sizeof(iv), iv_file);
+        if (fread(iv, 1, sizeof(iv), iv_file) != sizeof(iv)) {
+            fprintf(stderr, "Ошибка чтения IV из файла.\n");
+            fclose(iv_file);
+            return 1;
+        }
         fclose(iv_file);
     }
 
@@ -302,7 +319,6 @@ int main(int argc, char *argv[]) {
     memset(salt, 0, sizeof(salt));
     memset(mac, 0, sizeof(mac));
     memset(iv, 0, sizeof(iv));
-    // Если вы выделяли динамическую память, освободите ее здесь
 
     return 0;
 }
