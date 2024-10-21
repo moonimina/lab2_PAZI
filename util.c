@@ -47,7 +47,7 @@ unsigned char *generate_mac(const char *filename, const unsigned char *key, int 
     // Открываем файл для чтения
     FILE *file = fopen(filename, "rb");
     if (!file) {
-        perror("Не удалось открыть файл");
+        perror("Не удалось открыть файл для чтения");
         free(mac);
         return NULL;
     }
@@ -109,7 +109,7 @@ unsigned char *generate_mac(const char *filename, const unsigned char *key, int 
  * @param iv Указатель на IV.
  * @param salt Указатель на соль.
  */
-void write_mac_to_file(const char *original_file, const unsigned char *mac, int mac_len, const unsigned char *iv, const unsigned char *salt) {
+void write_mac_to_file(const char *original_file, const unsigned char *mac, unsigned int mac_len, const unsigned char *iv, const unsigned char *salt) {
     // Создание нового имени файла
     char new_filename[256];
     snprintf(new_filename, sizeof(new_filename), "%s+mac.txt", original_file);
@@ -129,6 +129,7 @@ void write_mac_to_file(const char *original_file, const unsigned char *mac, int 
         return;
     }
 
+    // Запись содержимого оригинального файла
     unsigned char buffer[4096];
     size_t bytes_read;
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), orig_file)) > 0) {
@@ -137,7 +138,7 @@ void write_mac_to_file(const char *original_file, const unsigned char *mac, int 
 
     // Запись имитовставки
     fwrite(mac, 1, mac_len, file);
-    
+
     // Запись IV и соли в файл
     fwrite(iv, 1, 16, file); // Предполагается, что IV имеет длину 16 байт
     fwrite(" ", 1, 1, file); // Пробел между IV и солью
@@ -195,12 +196,34 @@ int main(int argc, char *argv[]) {
             perror("Не удалось открыть файл IV и соли");
             return EXIT_FAILURE;
         }
-        fscanf(iv_salt_fp, "%16s %16s", iv, salt);
+
+        // Чтение IV и соли из файла
+        if (fscanf(iv_salt_fp, "%16s %16s", iv, salt) != 2) {
+            fprintf(stderr, "Ошибка при чтении IV и соли из файла\n");
+            fclose(iv_salt_fp);
+            return EXIT_FAILURE;
+        }
+
         fclose(iv_salt_fp);
     } else {
         // Генерация случайного IV и соли
-        RAND_bytes(iv, sizeof(iv));
-        RAND_bytes(salt, sizeof(salt));
+        if (RAND_bytes(iv, sizeof(iv)) != 1) {
+            fprintf(stderr, "Ошибка генерации IV\n");
+            return EXIT_FAILURE;
+        }
+        if (RAND_bytes(salt, sizeof(salt)) != 1) {
+            fprintf(stderr, "Ошибка генерации соли\n");
+            return EXIT_FAILURE;
+        }
+
+        // Запись IV и соли в файл
+        FILE *iv_salt_fp = fopen("iv_salt.txt", "w");
+        if (!iv_salt_fp) {
+            perror("Не удалось создать файл для записи IV и соли");
+            return EXIT_FAILURE;
+        }
+        fprintf(iv_salt_fp, "%s %s\n", iv, salt);
+        fclose(iv_salt_fp);
     }
 
     // Генерация ключа из пароля
