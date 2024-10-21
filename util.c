@@ -10,7 +10,7 @@
  * @brief Выводит справку по использованию программы.
  */
 void print_usage() {
-    printf("Использование: ./gmac_util -f <файл> -p <пароль> [-o <файл для iv и соли>]\n");
+    printf("Использование: ./util -f <файл> -p <пароль> [-o <файл для iv и соли>]\n");
 }
 
 /**
@@ -33,7 +33,7 @@ int generate_iv_and_salt(unsigned char *iv, unsigned char *salt, size_t iv_len, 
 }
 
 /**
- * @brief Записывает iv и соль в указанный файл.
+ * @brief Записывает iv и соль в указанный файл в формате "base64".
  * 
  * @param filename Имя файла для записи iv и соли.
  * @param iv Указатель на массив с iv.
@@ -43,12 +43,25 @@ int generate_iv_and_salt(unsigned char *iv, unsigned char *salt, size_t iv_len, 
  * @return int Возвращает 0 в случае успеха, иначе -1.
  */
 int write_iv_and_salt_to_file(const char *filename, unsigned char *iv, unsigned char *salt, size_t iv_len, size_t salt_len) {
-    FILE *file = fopen(filename, "w");
+    FILE *file = fopen(filename, "w, ccs=UTF-8");
     if (!file) {
         return -1; // Ошибка открытия файла
     }
-    fwrite(iv, 1, iv_len, file);
-    fwrite(salt, 1, salt_len, file);
+    
+    // Записываем iv в файл
+    fprintf(file, "IV: ");
+    for (size_t i = 0; i < iv_len; i++) {
+        fprintf(file, "%02x", iv[i]);
+    }
+    fprintf(file, "\n");
+    
+    // Записываем salt в файл
+    fprintf(file, "Salt: ");
+    for (size_t i = 0; i < salt_len; i++) {
+        fprintf(file, "%02x", salt[i]);
+    }
+    fprintf(file, "\n");
+    
     fclose(file);
     return 0;
 }
@@ -119,6 +132,9 @@ int generate_mac(const char *filename, const char *password, unsigned char *iv, 
     if (!output_file) {
         return -1; // Ошибка открытия файла
     }
+    
+    // Записываем текст "MAC: " перед имитовставкой
+    fprintf(output_file, "MAC: ");
     fwrite(mac, 1, EVP_GCM_TLS_TAG_LEN, output_file);
     fclose(output_file);
 
