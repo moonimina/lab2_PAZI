@@ -1,324 +1,236 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
-#include <openssl/err.h>
-#include <openssl/sha.h>
+#include <unistd.h>
 #include <getopt.h>
 
-/**
- * @brief Функция для генерации ключа из пароля с использованием PBKDF2.
- * 
- * @param password Пароль.
- * @param salt Соль.
- * @param key Буфер для сохранения ключа.
- * @param key_len Длина ключа.
- * @param iterations Количество итераций для PBKDF2.
- * @return int 0 в случае успеха, иначе 1.
- */
-int derive_key(const char *password, const unsigned char *salt, unsigned char *key, int key_len, int iterations) {
-    // Используется PBKDF2 для генерации ключа на основе пароля и соли
-    if (PKCS5_PBKDF2_HMAC_SHA1(password, strlen(password), salt, 16, iterations, key_len, key) != 1) {
-        fprintf(stderr, "Ошибка при генерации ключа.\n");
-        return 1;
+#define SALT_SIZE 16   ///< Размер соли в байтах
+#define IV_SIZE 12     ///< Размер IV в байтах
+#define MAC_SIZE 16    ///< Размер имитовставки (GMAC) в байтах
+
+/// @brief Функция для выработки ключа на основе пароля, соли и алгоритма PBKDF2
+/// @param password Пароль
+/// @param salt Соль
+/// @param key Буфер для хранения выработанного ключа
+/// @param key_len Длина ключа
+/// @return 0 в случае успеха, -1 в случае ошибки
+int derive_key(const char *password, const unsigned char *salt, unsigned char *key, int key_len) {
+    if (!PKCS5_PBKDF2_HMAC(password, strlen(password), salt, SALT_SIZE, 10000, EVP_sha256(), key_len, key)) {
+        fprintf(stderr, "Ошибка выработки ключа\n");
+        return -1;
     }
     return 0;
 }
 
-/**
- * @brief Функция для выработки имитовставки GMAC на основе файла и ключа.
- * 
- * Использует AES-256-GCM для генерации имитовставки на основе содержимого файла.
- * 
- * @param file_name Имя файла для вычисления имитовставки.
- * @param key Ключ для GMAC.
- * @param key_len Длина ключа.
- * @param mac Буфер для хранения имитовставки.
- * @param mac_len Длина имитовставки.
- * @return int 0 в случае успеха, иначе 1.
- */
-int generate_gmac(const char *file_name, const unsigned char *key, int key_len, unsigned char *mac, unsigned int *mac_len) {
-    FILE *file = fopen(file_name, "rb");
+/// @brief Функция для записи данных в файл
+/// @param filename Имя файла
+/// @param data Данные для записи
+/// @param len Размер данных
+/// @return 0 в случае успеха, -1 в случае ошибки
+int write_to_file(const char *filename, const unsigned char *data, size_t len) {
+    FILE *file = fopen(filename, "wb");
     if (!file) {
-        perror("Не удалось открыть файл");
-        return 1;
+        perror("Не удалось открыть файл для записи");
+        return -1;
     }
-
-    EVP_CIPHER_CTX *ctx;
-    unsigned char iv[12];  // Используем IV длиной 12 байт (рекомендовано для GCM/GMAC)
-    unsigned char buffer[1024];
-    size_t bytes_read;
-
-    // Генерация случайного IV
-    if (RAND_bytes(iv, sizeof(iv)) != 1) {
-        fprintf(stderr, "Ошибка генерации IV.\n");
-        fclose(file);
-        return 1;
-    }
-
-    // Инициализация контекста для GMAC
-    ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        fprintf(stderr, "Ошибка создания контекста.\n");
-        fclose(file);
-        return 1;
-    }
-
-    // Инициализация шифра для GCM (без шифрования, только MAC)
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) {
-        fprintf(stderr, "Ошибка инициализации шифра.\n");
-        EVP_CIPHER_CTX_free(ctx);
-        fclose(file);
-        return 1;
-    }
-
-    // Установка ключа и IV
-    if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
-        fprintf(stderr, "Ошибка установки ключа и IV.\n");
-        EVP_CIPHER_CTX_free(ctx);
-        fclose(file);
-        return 1;
-    }
-
-    // Чтение файла и обновление GMAC
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        if (EVP_EncryptUpdate(ctx, NULL, (int*)&bytes_read, buffer, (int)bytes_read) != 1) {
-            fprintf(stderr, "Ошибка обновления GMAC.\n");
-            EVP_CIPHER_CTX_free(ctx);
-            fclose(file);
-            return 1;
-        }
-    }
-
-    if (ferror(file)) {
-        perror("Ошибка чтения файла");
-        EVP_CIPHER_CTX_free(ctx);
-        fclose(file);
-        return 1;
-    }
-
-    // Завершение выработки имитовставки
-    if (EVP_EncryptFinal_ex(ctx, NULL, (int*)&bytes_read) != 1) {
-        fprintf(stderr, "Ошибка завершения GMAC.\n");
-        EVP_CIPHER_CTX_free(ctx);
-        fclose(file);
-        return 1;
-    }
-
-    // Получение значения имитовставки
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, mac) != 1) {
-        fprintf(stderr, "Ошибка получения имитовставки.\n");
-        EVP_CIPHER_CTX_free(ctx);
-        fclose(file);
-        return 1;
-    }
-
-    *mac_len = 16; // Длина имитовставки для GMAC (16 байт)
-
-    EVP_CIPHER_CTX_free(ctx);
+    fwrite(data, 1, len, file);
     fclose(file);
     return 0;
 }
 
-/**
- * @brief Функция для сохранения соли и IV в файлы.
- * 
- * Сохраняет соль и IV в файлы salt.bin и iv.bin для последующего использования.
- * 
- * @param salt Соль для сохранения.
- * @param iv IV для сохранения.
- * @return int 0 в случае успеха, иначе 1.
- */
-int save_salt_iv(const unsigned char *salt, const unsigned char *iv) {
-    FILE *salt_file = fopen("salt.bin", "wb");
-    if (!salt_file) {
-        perror("Не удалось открыть файл для сохранения соли");
-        return 1;
+/// @brief Функция для чтения данных из файла
+/// @param filename Имя файла
+/// @param data Буфер для хранения данных
+/// @param len Размер буфера
+/// @return Количество прочитанных байт, либо -1 в случае ошибки
+int read_from_file(const char *filename, unsigned char *data, size_t len) {
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("Не удалось открыть файл для чтения");
+        return -1;
     }
-    if (fwrite(salt, 1, 16, salt_file) != 16) {
-        perror("Ошибка записи соли в файл");
-        fclose(salt_file);
-        return 1;
-    }
-    fclose(salt_file);
-
-    FILE *iv_file = fopen("iv.bin", "wb");
-    if (!iv_file) {
-        perror("Не удалось открыть файл для сохранения IV");
-        return 1;
-    }
-    if (fwrite(iv, 1, 12, iv_file) != 12) {
-        perror("Ошибка записи IV в файл");
-        fclose(iv_file);
-        return 1;
-    }
-    fclose(iv_file);
-
-    return 0;
+    size_t read_len = fread(data, 1, len, file);
+    fclose(file);
+    return (int)read_len;
 }
-/**
- * @brief Функция для записи исходного файла с имитовставкой в новый файл.
- * 
- * Записывает содержимое исходного файла и имитовставку в новый файл 
- * с добавлением суффикса "+mac" к имени файла.
- * 
- * @param original_file Имя исходного файла.
- * @param mac Имитовставка для записи.
- * @param mac_len Длина имитовставки.
- * @return int 0 в случае успеха, иначе 1.
- */
-int write_file_with_mac(const char *original_file, const unsigned char *mac, unsigned int mac_len) {
-    // Создаем новое имя файла
-    char new_file_name[256];
-    snprintf(new_file_name, sizeof(new_file_name), "%s+mac.txt", original_file);
+
+/// @brief Функция для выработки и сохранения имитовставки (GMAC)
+/// @param filename Имя файла для чтения данных
+/// @param password Пароль для выработки ключа
+/// @param salt Соль
+/// @param iv IV (инициализационный вектор)
+/// @param mac Буфер для хранения выработанной имитовставки
+/// @return 0 в случае успеха, -1 в случае ошибки
+int generate_mac(const char *filename, const char *password, unsigned char *salt, unsigned char *iv, unsigned char *mac) {
+    unsigned char key[32];
     
-    FILE *new_file = fopen(new_file_name, "wb");
-    if (!new_file) {
-        perror("Не удалось открыть файл для записи с имитовставкой");
-        return 1;
+    // Выработка ключа из пароля и соли
+    if (derive_key(password, salt, key, sizeof(key)) != 0)
+        return -1;
+
+    // Чтение данных файла
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("Не удалось открыть файл");
+        return -1;
+    }
+    fseek(file, 0, SEEK_END);
+    size_t file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    unsigned char *file_data = malloc(file_size);
+    if (fread(file_data, 1, file_size, file) != file_size) {
+        perror("Ошибка чтения файла");
+        fclose(file);
+        free(file_data);
+        return -1;
+    }
+    fclose(file);
+
+    // Настройка контекста шифрования
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        perror("Ошибка создания контекста шифрования");
+        free(file_data);
+        return -1;
     }
 
-    // Открываем оригинальный файл для чтения
-    FILE *orig_file = fopen(original_file, "rb");
-    if (!orig_file) {
-        perror("Не удалось открыть оригинальный файл для чтения");
-        fclose(new_file);
-        return 1;
+    // Инициализация контекста с использованием AES-256 в режиме GMAC
+    if (!EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) {
+        perror("Ошибка инициализации шифра");
+        free(file_data);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    if (!EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv)) {
+        perror("Ошибка установки ключа и IV");
+        free(file_data);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
     }
 
-    // Копируем содержимое оригинального файла в новый файл
-    unsigned char buffer[1024];
-    size_t bytes_read;
-
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), orig_file)) > 0) {
-        fwrite(buffer, 1, bytes_read, new_file);
+    // Обработка файла
+    int len;
+    if (!EVP_EncryptUpdate(ctx, NULL, &len, file_data, file_size)) {
+        perror("Ошибка обработки данных");
+        free(file_data);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
     }
 
-    fclose(orig_file);
-
-    // Записываем имитовставку в шестнадцатеричном формате
-    for (unsigned int i = 0; i < mac_len; i++) {
-        fprintf(new_file, "%02x", mac[i]); // Преобразование в шестнадцатеричный формат
+    // Получение имитовставки (GMAC)
+    if (!EVP_EncryptFinal_ex(ctx, NULL, &len)) {
+        perror("Ошибка завершения шифрования");
+        free(file_data);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
     }
-    fprintf(new_file, "\n"); // Добавление новой строки для удобства
+    if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, MAC_SIZE, mac)) {
+        perror("Ошибка получения имитовставки");
+        free(file_data);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
 
-    fclose(new_file);
+    // Освобождение памяти
+    free(file_data);
+    EVP_CIPHER_CTX_free(ctx);
 
     return 0;
 }
-/**
- * @brief Основная функция программы. Обрабатывает аргументы командной строки и выполняет выработку имитовставки.
- * 
- * Если программа запускается первый раз для генерации имитовставки, необходимо использовать флаг -s.
- * Если программа используется для проверки имитовставки, необходимо загрузить файлы salt.bin и iv.bin и не использовать флаг -s.
- * 
- * @param argc Количество аргументов.
- * @param argv Массив аргументов.
- * @return int 0 в случае успеха, иначе 1.
- */
+
+/// @brief Функция для проверки имитовставки
+/// @param filename Имя файла
+/// @param password Пароль для выработки ключа
+/// @param salt Соль
+/// @param iv IV (инициализационный вектор)
+/// @param mac Имитовставка для проверки
+/// @return 0, если проверка успешна, -1 в случае ошибки
+int verify_mac(const char *filename, const char *password, unsigned char *salt, unsigned char *iv, unsigned char *mac) {
+    unsigned char calculated_mac[MAC_SIZE];
+
+    // Генерация имитовставки
+    if (generate_mac(filename, password, salt, iv, calculated_mac) != 0) {
+        return -1;
+    }
+
+    // Сравнение имитовставок
+    if (memcmp(mac, calculated_mac, MAC_SIZE) != 0) {
+        fprintf(stderr, "Имитовставка не совпадает!\n");
+        return -1;
+    }
+
+    printf("Имитовставка успешно проверена!\n");
+    return 0;
+}
+
+/// @brief Основная функция программы
+/// @param argc Количество аргументов командной строки
+/// @param argv Аргументы командной строки
+/// @return 0 в случае успеха, -1 в случае ошибки
 int main(int argc, char *argv[]) {
-    char *file_name = NULL;
+    int s_flag = 0;
     char *password = NULL;
-    unsigned char key[32];  // Ключ для AES-256
-    unsigned char salt[16]; // Соль для PBKDF2
-    unsigned char mac[16];  // Буфер для имитовставки
-    unsigned int mac_len;
-    unsigned char iv[12];   // IV для GMAC
-    int iterations = 10000; // Количество итераций для PBKDF2
-    int opt;
+    char *filename = NULL;
 
     // Обработка аргументов командной строки
-    while ((opt = getopt(argc, argv, "f:p:s")) != -1) {
+    int opt;
+    while ((opt = getopt(argc, argv, "sp:f:")) != -1) {
         switch (opt) {
-            case 'f':
-                file_name = optarg;  // Чтение имени файла
-                break;
-            case 'p':
-                password = optarg;  // Чтение пароля
-                break;
-            case 's':
-                // Флаг для генерации соли и IV, просто продолжаем
-                break;
-            default:
-                fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
-                return 1;
+        case 's':
+            s_flag = 1; // Генерация имитовставки
+            break;
+        case 'p':
+            password = optarg; // Пароль
+            break;
+        case 'f':
+            filename = optarg; // Имя файла
+            break;
+        default:
+            fprintf(stderr, "Usage: %s [-s] -p <password> -f <filename>\n", argv[0]);
+            exit(EXIT_FAILURE);
         }
     }
 
-    if (!file_name || !password) {
-        fprintf(stderr, "Необходимо указать файл и пароль.\n");
-        fprintf(stderr, "Использование: %s -f <имя файла> -p <пароль> [-s для сохранения соли и IV]\n", argv[0]);
-        return 1;
+    if (!password || !filename) {
+        fprintf(stderr, "Пароль и имя файла обязательны!\n");
+        exit(EXIT_FAILURE);
     }
 
-    // Проверяем, указан ли флаг -s
-    if (optind < argc && strcmp(argv[optind], "-s") == 0) {
+    unsigned char salt[SALT_SIZE];
+    unsigned char iv[IV_SIZE];
+    unsigned char mac[MAC_SIZE];
+
+    if (s_flag) {
         // Генерация соли и IV
-        if (RAND_bytes(salt, sizeof(salt)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
-            fprintf(stderr, "Ошибка генерации соли или IV.\n");
-            return 1;
+        if (!RAND_bytes(salt, SALT_SIZE) || !RAND_bytes(iv, IV_SIZE)) {
+            perror("Ошибка генерации соли или IV");
+            exit(EXIT_FAILURE);
         }
-        // Сохранение соли и IV
-        if (save_salt_iv(salt, iv) != 0) {
-            return 1;
+
+        // Генерация имитовставки
+        if (generate_mac(filename, password, salt, iv, mac) != 0) {
+            exit(EXIT_FAILURE);
         }
-        printf("Соль и IV успешно сохранены.\n");
+
+        // Запись соли, IV и имитовставки в файл
+        write_to_file("salt.bin", salt, SALT_SIZE);
+        write_to_file("iv.bin", iv, IV_SIZE);
+        write_to_file(filename, mac, MAC_SIZE); // Сохранение нового файла с имитовставкой
     } else {
-        // Загрузка соли и IV
-        FILE *salt_file = fopen("salt.bin", "rb");
-        if (!salt_file) {
-            fprintf(stderr, "Не удалось открыть файл salt.bin для чтения.\n");
-            return 1;
+        // Чтение соли и IV из файлов
+        read_from_file("salt.bin", salt, SALT_SIZE);
+        read_from_file("iv.bin", iv, IV_SIZE);
+
+        // Чтение имитовставки для проверки
+        read_from_file(filename, mac, MAC_SIZE);
+
+        // Проверка имитовставки
+        if (verify_mac(filename, password, salt, iv, mac) != 0) {
+            exit(EXIT_FAILURE);
         }
-        if (fread(salt, 1, sizeof(salt), salt_file) != sizeof(salt)) {
-            fprintf(stderr, "Ошибка чтения соли из файла.\n");
-            fclose(salt_file);
-            return 1;
-        }
-        fclose(salt_file);
-        
-        FILE *iv_file = fopen("iv.bin", "rb");
-        if (!iv_file) {
-            fprintf(stderr, "Не удалось открыть файл iv.bin для чтения.\n");
-            return 1;
-        }
-        if (fread(iv, 1, sizeof(iv), iv_file) != sizeof(iv)) {
-            fprintf(stderr, "Ошибка чтения IV из файла.\n");
-            fclose(iv_file);
-            return 1;
-        }
-        fclose(iv_file);
     }
-
-    // Генерация ключа из пароля
-    if (derive_key(password, salt, key, sizeof(key), iterations) != 0) {
-        return 1;
-    }
-
-    // Выработка имитовставки GMAC
-    if (generate_gmac(file_name, key, sizeof(key), mac, &mac_len) != 0) {
-        return 1;
-    }
-
-    // Запись исходного файла с имитовставкой в новый файл
-    if (write_file_with_mac(file_name, mac, mac_len) != 0) {
-        return 1;
-    }
-
-    // Вывод результата
-    printf("Имитовставка (GMAC): ");
-    for (unsigned int i = 0; i < mac_len; i++) {
-        printf("%02x", mac[i]);
-    }
-    printf("\n");
-
-    // Очищение чувствительных данных
-    memset(key, 0, sizeof(key));
-    memset(salt, 0, sizeof(salt));
-    memset(mac, 0, sizeof(mac));
-    memset(iv, 0, sizeof(iv));
 
     return 0;
 }
