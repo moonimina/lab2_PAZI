@@ -11,12 +11,13 @@
  * @brief Вывод справки по использованию программы.
  */
 void print_usage() {
-    printf("Использование: ./gmac_util -f <файл> -p <пароль> [-i <iv файл> -s <соль файл>]\n");
+    printf("Использование: ./gmac_util -f <файл> -p <пароль> [-i <iv и соль файл>]\n");
     printf("Опции:\n");
-    printf("  -f <файл>    Путь к файлу, для которого будет генерироваться имитовставка.\n");
-    printf("  -p <пароль>  Пароль для генерации ключа.\n");
-    printf("  -i <iv файл> Путь к файлу с IV для проверки целостности (опционально).\n");
-    printf("  -s <соль файл> Путь к файлу с солью для проверки целостности (опционально).\n");
+    printf("  -f <файл>          Путь к файлу, для которого будет генерироваться имитовставка.\n");
+    printf("  -p <пароль>        Пароль для генерации ключа.\n");
+    printf("  -i <iv и соль файл> Путь к файлу с IV и солью, разделенными пробелом (опционально).\n");
+    printf("\nНажмите Enter для продолжения...\n");
+    getchar(); // Ожидание ввода
 }
 
 /**
@@ -105,8 +106,10 @@ unsigned char *generate_mac(const char *filename, const unsigned char *key, int 
  * @param original_file Указатель на имя оригинального файла.
  * @param mac Указатель на имитовставку.
  * @param mac_len Длина имитовставки.
+ * @param iv Указатель на IV.
+ * @param salt Указатель на соль.
  */
-void write_mac_to_file(const char *original_file, const unsigned char *mac, int mac_len) {
+void write_mac_to_file(const char *original_file, const unsigned char *mac, int mac_len, const unsigned char *iv, const unsigned char *salt) {
     // Создание нового имени файла
     char new_filename[256];
     snprintf(new_filename, sizeof(new_filename), "%s+mac.txt", original_file);
@@ -134,6 +137,12 @@ void write_mac_to_file(const char *original_file, const unsigned char *mac, int 
 
     // Запись имитовставки
     fwrite(mac, 1, mac_len, file);
+    
+    // Запись IV и соли в файл
+    fwrite(iv, 1, 16, file); // Предполагается, что IV имеет длину 16 байт
+    fwrite(" ", 1, 1, file); // Пробел между IV и солью
+    fwrite(salt, 1, 16, file); // Предполагается, что соль имеет длину 16 байт
+    fwrite("\n", 1, 1, file); // Новая строка после записи IV и соли
 
     fclose(orig_file);
     fclose(file);
@@ -149,12 +158,11 @@ void write_mac_to_file(const char *original_file, const unsigned char *mac, int 
 int main(int argc, char *argv[]) {
     char *filename = NULL;
     char *password = NULL;
-    char *iv_file = NULL;
-    char *salt_file = NULL;
+    char *iv_salt_file = NULL;
 
     // Обработка аргументов командной строки
     int opt;
-    while ((opt = getopt(argc, argv, "f:p:i:s:")) != -1) {
+    while ((opt = getopt(argc, argv, "f:p:i:")) != -1) {
         switch (opt) {
             case 'f':
                 filename = optarg;
@@ -163,10 +171,7 @@ int main(int argc, char *argv[]) {
                 password = optarg;
                 break;
             case 'i':
-                iv_file = optarg;
-                break;
-            case 's':
-                salt_file = optarg;
+                iv_salt_file = optarg;
                 break;
             default:
                 print_usage();
@@ -180,18 +185,21 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Генерация соли (если требуется)
+    unsigned char iv[16];
     unsigned char salt[16];
-    if (salt_file != NULL) {
-        FILE *salt_fp = fopen(salt_file, "rb");
-        if (!salt_fp) {
-            perror("Не удалось открыть файл соли");
+
+    // Чтение IV и соли из файла, если указан
+    if (iv_salt_file != NULL) {
+        FILE *iv_salt_fp = fopen(iv_salt_file, "r");
+        if (!iv_salt_fp) {
+            perror("Не удалось открыть файл IV и соли");
             return EXIT_FAILURE;
         }
-        fread(salt, 1, sizeof(salt), salt_fp);
-        fclose(salt_fp);
+        fscanf(iv_salt_fp, "%16s %16s", iv, salt);
+        fclose(iv_salt_fp);
     } else {
-        // Генерация случайной соли
+        // Генерация случайного IV и соли
+        RAND_bytes(iv, sizeof(iv));
         RAND_bytes(salt, sizeof(salt));
     }
 
@@ -206,8 +214,8 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Запись имитовставки в файл
-    write_mac_to_file(filename, mac, EVP_MAX_MD_SIZE);
+    // Запись имитовставки и параметров в файл
+    write_mac_to_file(filename, mac, EVP_MAX_MD_SIZE, iv, salt);
 
     free(mac);
     return EXIT_SUCCESS;
