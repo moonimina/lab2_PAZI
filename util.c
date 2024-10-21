@@ -102,52 +102,16 @@ unsigned char *generate_mac(const char *filename, const unsigned char *key, int 
 }
 
 /**
- * @brief Записывает имитовставку в конец файла.
- * @param original_file Указатель на имя оригинального файла.
+ * @brief Выводит имитовставку на консоль.
  * @param mac Указатель на имитовставку.
  * @param mac_len Длина имитовставки.
- * @param iv Указатель на IV.
- * @param salt Указатель на соль.
  */
-void write_mac_to_file(const char *original_file, const unsigned char *mac, unsigned int mac_len, const unsigned char *iv, const unsigned char *salt) {
-    // Создание нового имени файла
-    char new_filename[256];
-    snprintf(new_filename, sizeof(new_filename), "%s+mac.txt", original_file);
-
-    // Открытие нового файла для записи
-    FILE *file = fopen(new_filename, "wb");
-    if (!file) {
-        perror("Не удалось создать файл с имитовставкой");
-        return;
+void print_mac(const unsigned char *mac, unsigned int mac_len) {
+    printf("Имитовставка (MAC): ");
+    for (unsigned int i = 0; i < mac_len; i++) {
+        printf("%02x", mac[i]);
     }
-
-    // Запись оригинального файла
-    FILE *orig_file = fopen(original_file, "rb");
-    if (!orig_file) {
-        perror("Не удалось открыть оригинальный файл");
-        fclose(file);
-        return;
-    }
-
-    // Запись содержимого оригинального файла
-    unsigned char buffer[4096];
-    size_t bytes_read;
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), orig_file)) > 0) {
-        fwrite(buffer, 1, bytes_read, file);
-    }
-
-    // Запись имитовставки
-    fwrite(mac, 1, mac_len, file);
-
-    // Запись IV и соли в файл
-    fwrite(iv, 1, 16, file); // Предполагается, что IV имеет длину 16 байт
-    fwrite(" ", 1, 1, file); // Пробел между IV и солью
-    fwrite(salt, 1, 16, file); // Предполагается, что соль имеет длину 16 байт
-    fwrite("\n", 1, 1, file); // Новая строка после записи IV и соли
-
-    fclose(orig_file);
-    fclose(file);
-    printf("Имитовставка записана в файл: %s\n", new_filename);
+    printf("\n");
 }
 
 /**
@@ -237,8 +201,8 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // Запись имитовставки и параметров в файл
-    write_mac_to_file(filename, mac, EVP_MAX_MD_SIZE, iv, salt);
+    // Вывод имитовставки на консоль
+    print_mac(mac, EVP_MAX_MD_SIZE);
 
     free(mac);
     return EXIT_SUCCESS;
