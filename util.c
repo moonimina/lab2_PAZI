@@ -26,6 +26,22 @@ int derive_key(const char *password, const unsigned char *salt, unsigned char *k
     return 0;
 }
 
+/// @brief Функция для записи данных в файл
+/// @param filename Имя файла
+/// @param data Данные для записи
+/// @param len Размер данных
+/// @return 0 в случае успеха, -1 в случае ошибки
+int write_to_file(const char *filename, const unsigned char *data, size_t len) {
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        perror("Не удалось открыть файл для записи");
+        return -1;
+    }
+    fwrite(data, 1, len, file);
+    fclose(file);
+    return 0;
+}
+
 /// @brief Функция для копирования данных из одного файла в другой
 /// @param src_filename Имя исходного файла
 /// @param dst_filename Имя целевого файла
@@ -219,7 +235,7 @@ int main(int argc, char *argv[]) {
             filename = optarg; // Имя файла
             break;
         default:
-            fprintf(stderr, "Usage: %s [-s] -p <password> -f <filename>\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-s] -p password -f filename\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
