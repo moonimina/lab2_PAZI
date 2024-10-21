@@ -5,6 +5,8 @@
 #include <openssl/rand.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #define SALT_SIZE 16   ///< Размер соли в байтах
 #define IV_SIZE 12     ///< Размер IV в байтах
@@ -24,15 +26,44 @@ int derive_key(const char *password, const unsigned char *salt, unsigned char *k
     return 0;
 }
 
-/// @brief Функция для записи данных в файл
+/// @brief Функция для копирования данных из одного файла в другой
+/// @param src_filename Имя исходного файла
+/// @param dst_filename Имя целевого файла
+/// @return 0 в случае успеха, -1 в случае ошибки
+int copy_file(const char *src_filename, const char *dst_filename) {
+    FILE *src_file = fopen(src_filename, "rb");
+    if (!src_file) {
+        perror("Не удалось открыть исходный файл для чтения");
+        return -1;
+    }
+
+    FILE *dst_file = fopen(dst_filename, "wb");
+    if (!dst_file) {
+        perror("Не удалось открыть целевой файл для записи");
+        fclose(src_file);
+        return -1;
+    }
+
+    char buffer[1024];
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), src_file)) > 0) {
+        fwrite(buffer, 1, bytes_read, dst_file);
+    }
+
+    fclose(src_file);
+    fclose(dst_file);
+    return 0;
+}
+
+/// @brief Функция для записи данных в конец файла
 /// @param filename Имя файла
 /// @param data Данные для записи
 /// @param len Размер данных
 /// @return 0 в случае успеха, -1 в случае ошибки
-int write_to_file(const char *filename, const unsigned char *data, size_t len) {
-    FILE *file = fopen(filename, "wb");
+int append_to_file(const char *filename, const unsigned char *data, size_t len) {
+    FILE *file = fopen(filename, "ab");
     if (!file) {
-        perror("Не удалось открыть файл для записи");
+        perror("Не удалось открыть файл для добавления данных");
         return -1;
     }
     fwrite(data, 1, len, file);
@@ -214,10 +245,23 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
 
-        // Запись соли, IV и имитовставки в файл
+        // Сохранение соли, IV и имитовставки в файл
         write_to_file("salt.bin", salt, SALT_SIZE);
         write_to_file("iv.bin", iv, IV_SIZE);
-        write_to_file(filename, mac, MAC_SIZE); // Сохранение нового файла с имитовставкой
+
+        // Копирование исходного файла и добавление в конец имитовставки
+        char new_filename[256];
+        snprintf(new_filename, sizeof(new_filename), "%s_mac.txt", filename);
+        if (copy_file(filename, new_filename) != 0) {
+            exit(EXIT_FAILURE);
+        }
+
+        // Добавление имитовставки в новый файл
+        if (append_to_file(new_filename, mac, MAC_SIZE) != 0) {
+            exit(EXIT_FAILURE);
+        }
+
+        printf("Файл с имитовставкой создан: %s\n", new_filename);
     } else {
         // Чтение соли и IV из файлов
         read_from_file("salt.bin", salt, SALT_SIZE);
