@@ -33,7 +33,7 @@ int generate_iv_and_salt(unsigned char *iv, unsigned char *salt, size_t iv_len, 
 }
 
 /**
- * @brief Записывает iv и соль в указанный файл в формате "base64".
+ * @brief Записывает iv и соль в указанный файл в формате "hex".
  * 
  * @param filename Имя файла для записи iv и соли.
  * @param iv Указатель на массив с iv.
@@ -43,19 +43,19 @@ int generate_iv_and_salt(unsigned char *iv, unsigned char *salt, size_t iv_len, 
  * @return int Возвращает 0 в случае успеха, иначе -1.
  */
 int write_iv_and_salt_to_file(const char *filename, unsigned char *iv, unsigned char *salt, size_t iv_len, size_t salt_len) {
-    FILE *file = fopen(filename, "w, ccs=UTF-8");
+    FILE *file = fopen(filename, "w");
     if (!file) {
         return -1; // Ошибка открытия файла
     }
     
-    // Записываем iv в файл
+    // Записываем iv в файл в hex формате
     fprintf(file, "IV: ");
     for (size_t i = 0; i < iv_len; i++) {
         fprintf(file, "%02x", iv[i]);
     }
     fprintf(file, "\n");
     
-    // Записываем salt в файл
+    // Записываем salt в файл в hex формате
     fprintf(file, "Salt: ");
     for (size_t i = 0; i < salt_len; i++) {
         fprintf(file, "%02x", salt[i]);
@@ -75,7 +75,7 @@ int write_iv_and_salt_to_file(const char *filename, unsigned char *iv, unsigned 
  * @param salt Соль.
  * @return int Возвращает 0 в случае успеха, иначе -1.
  */
-int generate_mac(const char *filename, const char *password, unsigned char *iv, unsigned char *salt) {
+int generate_mac(const char *filename, const char *password, unsigned char *iv, unsigned char *salt, unsigned char *mac) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
         return -1; // Ошибка открытия файла
@@ -102,7 +102,6 @@ int generate_mac(const char *filename, const char *password, unsigned char *iv, 
 
     unsigned char buffer[1024];
     int len;
-    unsigned char mac[EVP_GCM_TLS_TAG_LEN];
 
     while ((len = fread(buffer, 1, sizeof(buffer), file)) > 0) {
         if (EVP_EncryptUpdate(ctx, NULL, &len, buffer, len) != 1) {
@@ -118,6 +117,7 @@ int generate_mac(const char *filename, const char *password, unsigned char *iv, 
         return -1; // Ошибка завершения шифрования
     }
 
+    // Получение тега
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, EVP_GCM_TLS_TAG_LEN, mac) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         fclose(file);
@@ -126,18 +126,45 @@ int generate_mac(const char *filename, const char *password, unsigned char *iv, 
 
     EVP_CIPHER_CTX_free(ctx);
     fclose(file);
+    return 0;
+}
 
-    // Записываем имитовставку в конец файла
-    FILE *output_file = fopen("file+mac.txt", "ab");
+/**
+ * @brief Записывает текст и имитовставку в выходной файл.
+ * 
+ * @param input_filename Имя входного файла.
+ * @param output_filename Имя выходного файла.
+ * @param mac Имитовставка.
+ * @return int Возвращает 0 в случае успеха, иначе -1.
+ */
+int write_mac_to_file(const char *input_filename, const char *output_filename, unsigned char *mac) {
+    FILE *input_file = fopen(input_filename, "rb");
+    if (!input_file) {
+        return -1; // Ошибка открытия входного файла
+    }
+
+    // Создание выходного файла
+    FILE *output_file = fopen(output_filename, "wb");
     if (!output_file) {
-        return -1; // Ошибка открытия файла
+        fclose(input_file);
+        return -1; // Ошибка открытия выходного файла
+    }
+
+    // Копируем содержимое входного файла в выходной файл
+    unsigned char buffer[1024];
+    size_t len;
+    while ((len = fread(buffer, 1, sizeof(buffer), input_file)) > 0) {
+        fwrite(buffer, 1, len, output_file);
+    }
+
+    // Записываем текст "MAC: " перед имитовставкой
+    fprintf(output_file, "\nMAC: ");
+    for (size_t i = 0; i < EVP_GCM_TLS_TAG_LEN; i++) {
+        fprintf(output_file, "%02x", mac[i]); // Записываем MAC в hex формате
     }
     
-    // Записываем текст "MAC: " перед имитовставкой
-    fprintf(output_file, "MAC: ");
-    fwrite(mac, 1, EVP_GCM_TLS_TAG_LEN, output_file);
+    fclose(input_file);
     fclose(output_file);
-
     return 0;
 }
 
@@ -180,6 +207,7 @@ int main(int argc, char *argv[]) {
 
     unsigned char iv[16];   // Длина iv для AES
     unsigned char salt[16]; // Длина соли
+    unsigned char mac[EVP_GCM_TLS_TAG_LEN]; // Для хранения имитовставки
 
     // Генерация iv и соли, если не указан файл
     if (!iv_salt_file) {
@@ -198,14 +226,22 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Ошибка открытия файла iv и соли\n");
             return EXIT_FAILURE;
         }
-        fread(iv, 1, sizeof(iv), file);
-        fread(salt, 1, sizeof(salt), file);
+        
+        // Считываем значения iv и salt из файла
+        fscanf(file, "IV: %16s\n", iv); // Считываем iv в hex формате
+        fscanf(file, "Salt: %16s\n", salt); // Считываем salt в hex формате
         fclose(file);
     }
 
     // Генерация имитовставки
-    if (generate_mac(filename, password, iv, salt) != 0) {
+    if (generate_mac(filename, password, iv, salt, mac) != 0) {
         fprintf(stderr, "Ошибка генерации имитовставки\n");
+        return EXIT_FAILURE;
+    }
+
+    // Записываем текст и имитовставку в новый файл
+    if (write_mac_to_file(filename, "file+mac.txt", mac) != 0) {
+        fprintf(stderr, "Ошибка записи файла с имитовставкой\n");
         return EXIT_FAILURE;
     }
 
